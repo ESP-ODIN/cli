@@ -1,0 +1,17 @@
+root = "."
+tmp_dir = "tmp"
+
+[build]
+  cmd = "go build -o ./tmp/cli ."
+  entrypoint = "./tmp/cli"
+  include_ext = ["go"]
+  exclude_dir = ["tmp", "bin", "vendor"]
+  exclude_regex = ["_test\\.go"]
+  delay = 1000
+  stop_on_error = true
+
+[log]
+  time = false
+
+[misc]
+  clean_on_exit = false
