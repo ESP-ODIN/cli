@@ -1,3 +1,8 @@
+bin/
+tmp/
+coverage.out
+*.test
+
 # Binaire
 odin
 
