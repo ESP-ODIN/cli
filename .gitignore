@@ -2,3 +2,14 @@ bin/
 tmp/
 coverage.out
 *.test
+
+# Binaire
+odin
+
+# Artefacts Go
+*.exe
+*.test
+*.out
+
+# macOS
+.DS_Store

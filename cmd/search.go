@@ -1,10 +1,7 @@
 package cmd
 
 import (
-	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 
 	"github.com/ESP-ODIN/cli/internal"
 	"github.com/ESP-ODIN/cli/ui"
@@ -17,19 +14,10 @@ var searchCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		var agents []internal.Agent
 
-		err := ui.RunWithSpinner("Fetching registry...", func() error {
-			resp, err := http.Get("http://localhost:3500/agents")
-			if err != nil {
-				return fmt.Errorf("impossible de contacter le registry : %w", err)
-			}
-			defer resp.Body.Close()
-
-			body, err := io.ReadAll(resp.Body)
-			if err != nil {
-				return fmt.Errorf("erreur de lecture : %w", err)
-			}
-
-			return json.Unmarshal(body, &agents)
+		err := ui.RunWithSpinner("Récupération du registry...", func() error {
+			var err error
+			agents, err = internal.FetchAgentList()
+			return err
 		})
 
 		ui.Blank()
@@ -40,7 +28,7 @@ var searchCmd = &cobra.Command{
 			return
 		}
 
-		fmt.Println(ui.StyleHeader.Render("  Available agents"))
+		fmt.Println(ui.StyleHeader.Render("  Agents disponibles"))
 		ui.PrintDivider()
 		ui.Blank()
 
@@ -53,7 +41,7 @@ var searchCmd = &cobra.Command{
 		}
 
 		ui.Blank()
-		fmt.Println(ui.StyleMuted.Render(fmt.Sprintf("  %d agent(s) in registry", len(agents))))
+		fmt.Println(ui.StyleMuted.Render(fmt.Sprintf("  %d agent(s) disponible(s)", len(agents))))
 		ui.Blank()
 	},
 }
