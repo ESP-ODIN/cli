@@ -21,8 +21,8 @@ var runCmd = &cobra.Command{
 		agent, exists := reg.Agents[agentName]
 		if !exists {
 			ui.Blank()
-			ui.PrintError(fmt.Sprintf("Agent '%s' not installed.", agentName))
-			fmt.Println(ui.StyleMuted.Render(fmt.Sprintf("  Run: odin install %s", agentName)))
+			ui.PrintError(fmt.Sprintf("Agent '%s' non installé.", agentName))
+			fmt.Println(ui.StyleMuted.Render(fmt.Sprintf("  Lancez : odin install %s", agentName)))
 			ui.Blank()
 			return
 		}

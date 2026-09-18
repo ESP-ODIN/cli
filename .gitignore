@@ -1,0 +1,10 @@
+# Binaire
+odin
+
+# Artefacts Go
+*.exe
+*.test
+*.out
+
+# macOS
+.DS_Store

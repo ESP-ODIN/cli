@@ -1,10 +1,7 @@
 package cmd
 
 import (
-	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 
 	"github.com/ESP-ODIN/cli/internal"
 	"github.com/ESP-ODIN/cli/ui"
@@ -20,31 +17,17 @@ var installCmd = &cobra.Command{
 
 		ui.Blank()
 		fmt.Printf("  %s %s\n",
-			ui.StyleHeader.Render("Installing"),
+			ui.StyleHeader.Render("Installation de"),
 			ui.StyleAccent.Render(agentName),
 		)
 		ui.Blank()
 
 		var agent internal.Agent
 
-		err := ui.RunWithSpinner("Fetching from registry...", func() error {
-			url := fmt.Sprintf("http://localhost:3500/agents/%s", agentName)
-			resp, err := http.Get(url)
-			if err != nil {
-				return fmt.Errorf("impossible de contacter le registry : %w", err)
-			}
-			defer resp.Body.Close()
-
-			if resp.StatusCode == 404 {
-				return fmt.Errorf("agent '%s' introuvable", agentName)
-			}
-
-			body, err := io.ReadAll(resp.Body)
-			if err != nil {
-				return fmt.Errorf("erreur de lecture : %w", err)
-			}
-
-			return json.Unmarshal(body, &agent)
+		err := ui.RunWithSpinner("Récupération depuis le registry...", func() error {
+			var err error
+			agent, err = internal.FetchAgentByName(agentName)
+			return err
 		})
 
 		if err != nil {
@@ -53,8 +36,8 @@ var installCmd = &cobra.Command{
 			return
 		}
 
-		ui.Step("Resolving manifest...")
-		ui.Step("Verifying agent...")
+		ui.Step("Résolution du manifest...")
+		ui.Step("Vérification de l'agent...")
 
 		reg := internal.LoadRegistry()
 		reg.Agents[agentName] = agent
@@ -66,7 +49,7 @@ var installCmd = &cobra.Command{
 		}
 
 		ui.Blank()
-		ui.PrintSuccess(fmt.Sprintf("%s@%s installed", agent.Name, agent.Version))
+		ui.PrintSuccess(fmt.Sprintf("%s@%s installé", agent.Name, agent.Version))
 		ui.Blank()
 	},
 }
