@@ -20,10 +20,11 @@ type Agent struct {
 	Name        string `json:"name"        toml:"name"`
 	Version     string `json:"version"     toml:"version"`
 	Description string `json:"description" toml:"description"`
-	// Repo is the GitHub "owner/repo" where the agent's odin.toml lives.
+	// Repo is the GitHub "owner/repo" where the agent's manifest lives.
 	Repo string `json:"repo" toml:"repo"`
 	// Run is the shell command to execute the agent.
-	Run string `json:"run" toml:"run"`
+	Run      string   `json:"run"      toml:"entrypoint"`
+	Requires []string `json:"requires,omitempty" toml:"requires"`
 }
 
 // Registry is the local list of installed agents persisted at ~/.odin/registry.json.
@@ -34,6 +35,12 @@ type Registry struct {
 func getRegistryPath() string {
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".odin", "registry.json")
+}
+
+// AgentDir returns the local directory where an agent's files are stored.
+func AgentDir(name string) string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".odin", "agents", name)
 }
 
 // LoadRegistry reads ~/.odin/registry.json; returns an empty registry if missing.
@@ -112,25 +119,55 @@ func FetchAgentByName(name string) (Agent, error) {
 	return FetchManifestFromGitHub(entry.Repo)
 }
 
-// FetchManifestFromGitHub fetches and parses odin.toml from the default branch
-// of the given "owner/repo".
+// FetchManifestFromGitHub fetches and parses odin.toml (or manifest.toml as fallback)
+// from the default branch of the given "owner/repo".
 func FetchManifestFromGitHub(ownerRepo string) (Agent, error) {
-	url := fmt.Sprintf("https://raw.githubusercontent.com/%s/main/odin.toml", ownerRepo)
+	for _, filename := range []string{"odin.toml", "manifest.toml"} {
+		url := fmt.Sprintf("https://raw.githubusercontent.com/%s/main/%s", ownerRepo, filename)
+		resp, err := http.Get(url)
+		if err != nil {
+			return Agent{}, fmt.Errorf("cannot fetch manifest from GitHub: %w", err)
+		}
+
+		if resp.StatusCode == 404 {
+			resp.Body.Close()
+			continue
+		}
+
+		var agent Agent
+		_, decodeErr := toml.NewDecoder(resp.Body).Decode(&agent)
+		resp.Body.Close()
+		if decodeErr != nil {
+			return Agent{}, fmt.Errorf("invalid %s in %s: %w", filename, ownerRepo, decodeErr)
+		}
+
+		// manifest.toml uses "entrypoint" but toml tag on Run is already "entrypoint".
+		// If Run is still empty, try the "entrypoint" key via a raw decode.
+		if agent.Run == "" {
+			agent.Run = fetchEntrypoint(ownerRepo, filename)
+		}
+
+		agent.Repo = ownerRepo
+		return agent, nil
+	}
+
+	return Agent{}, fmt.Errorf("no odin.toml or manifest.toml found in %s (branch: main)", ownerRepo)
+}
+
+// fetchEntrypoint is a fallback raw decode to read the "entrypoint" key when the
+// struct tag mapping doesn't cover it (e.g. manifest.toml uses "entrypoint", not "run").
+func fetchEntrypoint(ownerRepo, filename string) string {
+	url := fmt.Sprintf("https://raw.githubusercontent.com/%s/main/%s", ownerRepo, filename)
 	resp, err := http.Get(url)
-	if err != nil {
-		return Agent{}, fmt.Errorf("cannot fetch manifest from GitHub: %w", err)
+	if err != nil || resp.StatusCode != 200 {
+		return ""
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == 404 {
-		return Agent{}, fmt.Errorf("odin.toml not found in %s (branch: main)", ownerRepo)
+	var raw map[string]interface{}
+	toml.NewDecoder(resp.Body).Decode(&raw)
+	if v, ok := raw["entrypoint"].(string); ok {
+		return v
 	}
-
-	var agent Agent
-	if _, err := toml.NewDecoder(resp.Body).Decode(&agent); err != nil {
-		return Agent{}, fmt.Errorf("invalid odin.toml in %s: %w", ownerRepo, err)
-	}
-
-	agent.Repo = ownerRepo
-	return agent, nil
+	return ""
 }
