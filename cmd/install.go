@@ -15,16 +15,17 @@ import (
 var installRepo string
 
 var installCmd = &cobra.Command{
-	Use:   "install [nom]",
+	Use:   "install [nom[@version]]",
 	Short: "Installe un agent depuis le registry",
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		agentName := args[0]
+		input := args[0]
+		name, version := parseNameVersion(input)
 
 		ui.Blank()
 		fmt.Printf("  %s %s\n",
 			ui.StyleHeader.Render("Installation de"),
-			ui.StyleAccent.Render(agentName),
+			ui.StyleAccent.Render(input),
 		)
 		ui.Blank()
 
@@ -35,7 +36,7 @@ var installCmd = &cobra.Command{
 			if installRepo != "" {
 				agent, err = internal.FetchManifestFromGitHub(installRepo)
 			} else {
-				agent, err = internal.FetchAgentByName(agentName)
+				agent, err = internal.FetchPackage(name, version)
 			}
 			return err
 		})
@@ -46,11 +47,8 @@ var installCmd = &cobra.Command{
 			return
 		}
 
-		ui.Step("Résolution du manifest...")
-		ui.Step("Vérification de l'agent...")
-
 		reg := internal.LoadRegistry()
-		reg.Agents[agentName] = agent
+		reg.Agents[agent.Name] = agent
 
 		if err := internal.SaveRegistry(reg); err != nil {
 			ui.PrintError("Erreur de sauvegarde : " + err.Error())
@@ -58,29 +56,30 @@ var installCmd = &cobra.Command{
 			return
 		}
 
-		// Clone the agent's repo into ~/.odin/agents/<name>/
-		agentDir := internal.AgentDir(agentName)
-		err = ui.RunWithSpinner("Cloning agent repository...", func() error {
-			os.RemoveAll(agentDir)
-			cmd := exec.Command("git", "clone", "--depth=1",
-				"https://github.com/"+agent.Repo+".git", agentDir)
-			cmd.Stdout = nil
-			cmd.Stderr = nil
-			return cmd.Run()
-		})
-		if err != nil {
-			ui.PrintError("Erreur de clonage : " + err.Error())
-			ui.Blank()
-			return
-		}
-
-		// Install Python dependencies if requirements.txt exists
-		reqFile := agentDir + "/requirements.txt"
-		if _, statErr := os.Stat(reqFile); statErr == nil {
-			_ = ui.RunWithSpinner("Installing dependencies...", func() error {
-				cmd := exec.Command("pip3", "install", "-r", reqFile, "--quiet")
+		// Clone le repo de l'agent si un Repo est défini (agents GitHub)
+		if agent.Repo != "" {
+			agentDir := internal.AgentDir(agent.Name)
+			err = ui.RunWithSpinner("Cloning agent repository...", func() error {
+				os.RemoveAll(agentDir)
+				cmd := exec.Command("git", "clone", "--depth=1",
+					"https://github.com/"+agent.Repo+".git", agentDir)
+				cmd.Stdout = nil
+				cmd.Stderr = nil
 				return cmd.Run()
 			})
+			if err != nil {
+				ui.PrintError("Erreur de clonage : " + err.Error())
+				ui.Blank()
+				return
+			}
+
+			reqFile := agentDir + "/requirements.txt"
+			if _, statErr := os.Stat(reqFile); statErr == nil {
+				_ = ui.RunWithSpinner("Installing dependencies...", func() error {
+					cmd := exec.Command("pip3", "install", "-r", reqFile, "--quiet")
+					return cmd.Run()
+				})
+			}
 		}
 
 		if len(agent.Requires) > 0 {
@@ -119,6 +118,16 @@ var installCmd = &cobra.Command{
 		ui.PrintSuccess(fmt.Sprintf("%s@%s installé", agent.Name, agent.Version))
 		ui.Blank()
 	},
+}
+
+// parseNameVersion splits "name@version" into (name, version).
+// If no version is specified, returns "latest".
+func parseNameVersion(input string) (string, string) {
+	parts := strings.SplitN(input, "@", 2)
+	if len(parts) == 2 && parts[1] != "" {
+		return parts[0], parts[1]
+	}
+	return parts[0], "latest"
 }
 
 func init() {
