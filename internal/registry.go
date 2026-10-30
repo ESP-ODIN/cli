@@ -5,15 +5,18 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/BurntSushi/toml"
+	"github.com/google/uuid"
 )
 
-// RegistryURL is the base URL of the ODIN backend registry.
+// RegistryURL is the base URL of the ODIN marketplace backend.
 // Override at build time: -ldflags "-X github.com/ESP-ODIN/cli/internal.RegistryURL=https://..."
-var RegistryURL = "http://localhost:3500"
+var RegistryURL = "http://localhost:8081"
 
 // Agent represents an installed agent.
 type Agent struct {
@@ -25,12 +28,59 @@ type Agent struct {
 	// Run is the shell command to execute the agent.
 	Run      string   `json:"run"      toml:"entrypoint"`
 	Requires []string `json:"requires,omitempty" toml:"requires"`
+	// Fields from the marketplace API
+	ID        string `json:"id,omitempty"`
+	Category  string `json:"category,omitempty"`
+	AgentType string `json:"agent_type,omitempty"`
+	Runtime   string `json:"runtime,omitempty"`
 }
 
 // Registry is the local list of installed agents persisted at ~/.odin/registry.json.
 type Registry struct {
 	Agents map[string]Agent `json:"agents"`
 }
+
+// --- backend DTO types (mirror marketplace models) ---
+
+type backendAgent struct {
+	ID             uuid.UUID `json:"id"`
+	Name           string    `json:"name"`
+	Category       string    `json:"category"`
+	AgentType      string    `json:"agent_type"`
+	Runtime        string    `json:"runtime"`
+	Description    *string   `json:"description"`
+	IsOfficialPick bool      `json:"is_official_pick"`
+	DownloadsCount int       `json:"downloads_count"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+}
+
+type backendAgentVersion struct {
+	ID        uuid.UUID `json:"id"`
+	AgentID   uuid.UUID `json:"agent_id"`
+	Version   string    `json:"version"`
+	IsStable  bool      `json:"is_stable"`
+	RepoLink  *string   `json:"repo_link"`
+	Changelog *string   `json:"changelog"`
+}
+
+type packageSearchResponse struct {
+	Count int            `json:"count"`
+	Data  []backendAgent `json:"data"`
+}
+
+type packageDetailResponse struct {
+	Agent   backendAgent        `json:"agent"`
+	Version backendAgentVersion `json:"version"`
+}
+
+type cliErrorResponse struct {
+	Code    string         `json:"code"`
+	Message string         `json:"message"`
+	Details map[string]any `json:"details"`
+}
+
+// --- local registry helpers ---
 
 func getRegistryPath() string {
 	home, _ := os.UserHomeDir()
@@ -69,62 +119,108 @@ func SaveRegistry(reg Registry) error {
 	return os.WriteFile(path, data, 0644)
 }
 
-// FetchAgentList fetches the list of available agents from the backend registry.
-func FetchAgentList() ([]Agent, error) {
-	resp, err := http.Get(RegistryURL + "/agents")
+// --- marketplace API calls ---
+
+func doGet(path string) ([]byte, int, error) {
+	resp, err := http.Get(RegistryURL + path)
 	if err != nil {
-		return nil, fmt.Errorf("cannot reach registry: %w", err)
+		return nil, 0, fmt.Errorf("impossible de contacter le registry : %w", err)
 	}
 	defer resp.Body.Close()
-
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("read error: %w", err)
+		return nil, resp.StatusCode, fmt.Errorf("read error: %w", err)
+	}
+	return body, resp.StatusCode, nil
+}
+
+// SearchPackages calls GET /api/v1/packages/search?q=<query> and returns matching agents.
+func SearchPackages(query string) ([]Agent, error) {
+	path := "/api/v1/packages/search"
+	if query != "" {
+		path += "?q=" + url.QueryEscape(query)
 	}
 
-	var agents []Agent
-	if err := json.Unmarshal(body, &agents); err != nil {
+	body, status, err := doGet(path)
+	if err != nil {
+		return nil, err
+	}
+	if status != http.StatusOK {
+		var apiErr cliErrorResponse
+		json.Unmarshal(body, &apiErr)
+		return nil, fmt.Errorf("registry error (%s): %s", apiErr.Code, apiErr.Message)
+	}
+
+	var resp packageSearchResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
 		return nil, fmt.Errorf("invalid registry response: %w", err)
+	}
+
+	agents := make([]Agent, len(resp.Data))
+	for i, a := range resp.Data {
+		agents[i] = backendAgentToLocal(a, "")
 	}
 	return agents, nil
 }
 
-// FetchAgentByName resolves an agent name via the backend registry, then fetches
-// its odin.toml manifest from the agent's GitHub repo.
-func FetchAgentByName(name string) (Agent, error) {
-	resp, err := http.Get(fmt.Sprintf("%s/agents/%s", RegistryURL, name))
+// FetchPackage calls GET /api/v1/packages/{name}/{version} and returns the agent ready to install.
+// Pass "latest" as version to get the latest stable release.
+func FetchPackage(name, version string) (Agent, error) {
+	path := fmt.Sprintf("/api/v1/packages/%s/%s", url.PathEscape(name), url.PathEscape(version))
+
+	body, status, err := doGet(path)
 	if err != nil {
-		return Agent{}, fmt.Errorf("cannot reach registry: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == 404 {
-		return Agent{}, fmt.Errorf("agent '%s' not found in registry", name)
+		return Agent{}, err
 	}
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return Agent{}, fmt.Errorf("read error: %w", err)
+	if status == http.StatusNotFound {
+		var apiErr cliErrorResponse
+		json.Unmarshal(body, &apiErr)
+		switch apiErr.Code {
+		case "PACKAGE_NOT_FOUND":
+			return Agent{}, fmt.Errorf("agent '%s' introuvable dans le registry", name)
+		case "VERSION_NOT_FOUND":
+			return Agent{}, fmt.Errorf("version '%s' introuvable pour l'agent '%s'", version, name)
+		}
+		return Agent{}, fmt.Errorf("agent '%s@%s' introuvable", name, version)
 	}
 
-	var entry Agent
-	if err := json.Unmarshal(body, &entry); err != nil {
+	if status != http.StatusOK {
+		var apiErr cliErrorResponse
+		json.Unmarshal(body, &apiErr)
+		return Agent{}, fmt.Errorf("registry error (%s): %s", apiErr.Code, apiErr.Message)
+	}
+
+	var detail packageDetailResponse
+	if err := json.Unmarshal(body, &detail); err != nil {
 		return Agent{}, fmt.Errorf("invalid registry response: %w", err)
 	}
 
-	if entry.Repo == "" {
-		return Agent{}, fmt.Errorf("agent '%s' has no GitHub repo configured", name)
-	}
+	return backendAgentToLocal(detail.Agent, detail.Version.Version), nil
+}
 
-	return FetchManifestFromGitHub(entry.Repo)
+func backendAgentToLocal(a backendAgent, version string) Agent {
+	desc := ""
+	if a.Description != nil {
+		desc = *a.Description
+	}
+	return Agent{
+		ID:          a.ID.String(),
+		Name:        a.Name,
+		Version:     version,
+		Description: desc,
+		Category:    a.Category,
+		AgentType:   a.AgentType,
+		Runtime:     a.Runtime,
+	}
 }
 
 // FetchManifestFromGitHub fetches and parses odin.toml (or manifest.toml as fallback)
 // from the default branch of the given "owner/repo".
 func FetchManifestFromGitHub(ownerRepo string) (Agent, error) {
 	for _, filename := range []string{"odin.toml", "manifest.toml"} {
-		url := fmt.Sprintf("https://raw.githubusercontent.com/%s/main/%s", ownerRepo, filename)
-		resp, err := http.Get(url)
+		rawURL := fmt.Sprintf("https://raw.githubusercontent.com/%s/main/%s", ownerRepo, filename)
+		resp, err := http.Get(rawURL)
 		if err != nil {
 			return Agent{}, fmt.Errorf("cannot fetch manifest from GitHub: %w", err)
 		}
@@ -141,8 +237,6 @@ func FetchManifestFromGitHub(ownerRepo string) (Agent, error) {
 			return Agent{}, fmt.Errorf("invalid %s in %s: %w", filename, ownerRepo, decodeErr)
 		}
 
-		// manifest.toml uses "entrypoint" but toml tag on Run is already "entrypoint".
-		// If Run is still empty, try the "entrypoint" key via a raw decode.
 		if agent.Run == "" {
 			agent.Run = fetchEntrypoint(ownerRepo, filename)
 		}
@@ -154,11 +248,9 @@ func FetchManifestFromGitHub(ownerRepo string) (Agent, error) {
 	return Agent{}, fmt.Errorf("no odin.toml or manifest.toml found in %s (branch: main)", ownerRepo)
 }
 
-// fetchEntrypoint is a fallback raw decode to read the "entrypoint" key when the
-// struct tag mapping doesn't cover it (e.g. manifest.toml uses "entrypoint", not "run").
 func fetchEntrypoint(ownerRepo, filename string) string {
-	url := fmt.Sprintf("https://raw.githubusercontent.com/%s/main/%s", ownerRepo, filename)
-	resp, err := http.Get(url)
+	rawURL := fmt.Sprintf("https://raw.githubusercontent.com/%s/main/%s", ownerRepo, filename)
+	resp, err := http.Get(rawURL)
 	if err != nil || resp.StatusCode != 200 {
 		return ""
 	}

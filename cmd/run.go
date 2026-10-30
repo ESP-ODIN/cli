@@ -40,10 +40,20 @@ var runCmd = &cobra.Command{
 		ui.PrintDivider()
 		ui.Blank()
 
+		if agent.Run == "" {
+			fmt.Printf("  %s  %s\n",
+				ui.StyleMuted.Render("runtime:"),
+				ui.StyleAccent.Render(agent.Runtime),
+			)
+			fmt.Println()
+			fmt.Println(ui.StyleMuted.Render("  L'exécution d'agents n'est pas encore supportée."))
+			fmt.Println(ui.StyleMuted.Render("  Un champ entrypoint sera défini côté backend dans une prochaine version."))
+			ui.Blank()
+			return
+		}
+
 		agentDir := internal.AgentDir(agentName)
 
-		// Rewrite relative script paths to absolute so the agent can be run
-		// from the user's cwd (which is the git repo the agent will operate on).
 		runCommand := makeAbsolute(agent.Run, agentDir)
 		if len(extraArgs) > 0 {
 			runCommand = runCommand + " " + strings.Join(extraArgs, " ")
@@ -56,7 +66,6 @@ var runCmd = &cobra.Command{
 			command = exec.Command("sh", "-c", runCommand)
 		}
 
-		// Execute from the user's working directory so git log reads their repo.
 		cwd, _ := os.Getwd()
 		command.Dir = cwd
 
@@ -95,7 +104,6 @@ func makeAbsolute(command, agentDir string) string {
 	interpreter := parts[0]
 	rest := parts[1]
 
-	// Split rest into script + remaining args
 	restParts := strings.SplitN(rest, " ", 2)
 	script := restParts[0]
 
