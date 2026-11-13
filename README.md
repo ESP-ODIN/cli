@@ -18,11 +18,12 @@ Mets le binaire `odin` dans ton `$PATH`.
 
 ## Commandes
 
-### `odin search`
-Liste tous les agents disponibles dans le registry.
+### `odin search [mot-clé]`
+Recherche des agents dans le registry (`GET /api/v1/packages/search?q=`), par nom ou description. Sans mot-clé, liste tous les agents disponibles. Les agents déjà installés sont marqués `✓ installé`, les choix officiels `★ officiel`.
 
 ```sh
 odin search
+odin search changelog
 ```
 
 ### `odin install <nom>`
@@ -38,8 +39,8 @@ odin install commit-helper
 odin install mon-agent --repo owner/repo
 ```
 
-### `odin list`
-Affiche les agents déjà installés sur ta machine.
+### `odin list` (alias `ls`)
+Affiche les agents déjà installés sur ta machine (triés par nom), à partir de `~/.odin/registry.json`.
 
 ```sh
 odin list

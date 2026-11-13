@@ -2,11 +2,13 @@ package ui
 
 import (
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/mattn/go-isatty"
 )
 
 type spinnerModel struct {
@@ -52,8 +54,14 @@ func (m spinnerModel) View() string {
 	)
 }
 
-// RunWithSpinner exécute fn avec un spinner animé, retourne l'erreur éventuelle
+// RunWithSpinner exécute fn avec un spinner animé, retourne l'erreur éventuelle.
+// Sans terminal interactif (pipe, CI), affiche simplement l'étape puis exécute fn.
 func RunWithSpinner(label string, fn func() error) error {
+	if !isatty.IsTerminal(os.Stdout.Fd()) {
+		PrintStep(label)
+		return fn()
+	}
+
 	s := spinner.New()
 	s.Spinner = spinner.Dot
 	s.Style = lipgloss.NewStyle().Foreground(colorOrange)
