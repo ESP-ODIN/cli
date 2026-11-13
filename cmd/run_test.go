@@ -66,3 +66,32 @@ func TestRunCmd_DoesNotParseAgentFlags(t *testing.T) {
 		t.Errorf("args = %v", got)
 	}
 }
+
+func TestResolveInterpreter(t *testing.T) {
+	prev := lookPath
+	t.Cleanup(func() { lookPath = prev })
+
+	onPath := map[string]bool{}
+	lookPath = func(name string) (string, error) {
+		if onPath[name] {
+			return "/usr/bin/" + name, nil
+		}
+		return "", os.ErrNotExist
+	}
+
+	in := "python '/a b/agent.py' --x"
+
+	onPath["python3"] = true
+	if got := resolveInterpreter(in); got != "python3 '/a b/agent.py' --x" {
+		t.Errorf("fallback not applied: %q", got)
+	}
+
+	onPath["python"] = true
+	if got := resolveInterpreter(in); got != in {
+		t.Errorf("python available, entrypoint must be unchanged: %q", got)
+	}
+
+	if got := resolveInterpreter("node index.js"); got != "node index.js" {
+		t.Errorf("unrelated interpreter changed: %q", got)
+	}
+}

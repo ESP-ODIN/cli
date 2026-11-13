@@ -68,7 +68,7 @@ func runAgent(agentName string, extraArgs []string) int {
 		return 1
 	}
 
-	command := buildCommand(makeAbsolute(agent.Run, agentDir), extraArgs)
+	command := buildCommand(resolveInterpreter(makeAbsolute(agent.Run, agentDir)), extraArgs)
 
 	cwd, err := os.Getwd()
 	if err == nil {
@@ -140,6 +140,39 @@ func makeAbsolute(command, agentDir string) string {
 		}
 	}
 	return command
+}
+
+// interpreterFallbacks maps interpreters commonly written in manifests to an
+// alternative used when the first one is not on PATH (e.g. macOS ships
+// python3 but no python).
+var interpreterFallbacks = map[string]string{
+	"python": "python3",
+	"pip":    "pip3",
+}
+
+// lookPath is overridable in tests.
+var lookPath = exec.LookPath
+
+// resolveInterpreter swaps the entrypoint's interpreter for its fallback when
+// the declared one is missing and the fallback is available.
+func resolveInterpreter(entrypoint string) string {
+	fields := strings.Fields(entrypoint)
+	if len(fields) == 0 {
+		return entrypoint
+	}
+	fallback, ok := interpreterFallbacks[fields[0]]
+	if !ok {
+		return entrypoint
+	}
+	if _, err := lookPath(fields[0]); err == nil {
+		return entrypoint
+	}
+	if _, err := lookPath(fallback); err != nil {
+		return entrypoint
+	}
+	// Replace only the leading token so quoted paths later on stay intact.
+	trimmed := strings.TrimLeft(entrypoint, " \t")
+	return fallback + strings.TrimPrefix(trimmed, fields[0])
 }
 
 func missingKeys(required []string, keys map[string]string) []string {
