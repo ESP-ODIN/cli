@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -62,6 +63,8 @@ type backendAgentVersion struct {
 	IsStable  bool      `json:"is_stable"`
 	RepoLink  *string   `json:"repo_link"`
 	Changelog *string   `json:"changelog"`
+	// ManifestToml is the raw odin.toml published with this version.
+	ManifestToml *string `json:"manifest_toml"`
 }
 
 type packageSearchResponse struct {
@@ -196,7 +199,59 @@ func FetchPackage(name, version string) (Agent, error) {
 		return Agent{}, fmt.Errorf("invalid registry response: %w", err)
 	}
 
-	return backendAgentToLocal(detail.Agent, detail.Version.Version), nil
+	agent := backendAgentToLocal(detail.Agent, detail.Version.Version)
+	if detail.Version.RepoLink != nil {
+		agent.Repo = ParseGitHubRepo(*detail.Version.RepoLink)
+	}
+
+	// Resolve how to run the agent: prefer the manifest published with the
+	// version, fall back to the odin.toml hosted in the agent's GitHub repo.
+	var manifest Agent
+	var manifestErr error
+	if detail.Version.ManifestToml != nil && strings.TrimSpace(*detail.Version.ManifestToml) != "" {
+		manifest, manifestErr = ParseManifest(*detail.Version.ManifestToml)
+	} else if agent.Repo != "" {
+		manifest, manifestErr = FetchManifestFromGitHub(agent.Repo)
+	}
+	if manifestErr != nil {
+		return Agent{}, manifestErr
+	}
+	agent.Run = manifest.Run
+	agent.Requires = manifest.Requires
+
+	return agent, nil
+}
+
+// ParseManifest decodes an odin.toml manifest.
+func ParseManifest(raw string) (Agent, error) {
+	var agent Agent
+	if _, err := toml.Decode(raw, &agent); err != nil {
+		return Agent{}, fmt.Errorf("manifest odin.toml invalide : %w", err)
+	}
+	return agent, nil
+}
+
+// ParseGitHubRepo extracts "owner/repo" from a GitHub link. It accepts
+// "owner/repo", "https://github.com/owner/repo(.git)" and
+// "git@github.com:owner/repo.git". Returns "" if the link is not recognised.
+func ParseGitHubRepo(link string) string {
+	s := strings.TrimSpace(link)
+	for _, prefix := range []string{"https://", "http://", "git@"} {
+		s = strings.TrimPrefix(s, prefix)
+	}
+	s = strings.TrimPrefix(s, "www.")
+	if rest, ok := strings.CutPrefix(s, "github.com"); ok {
+		s = strings.TrimLeft(rest, ":/")
+	} else if strings.Contains(s, ".") && strings.Contains(strings.SplitN(s, "/", 2)[0], ".") {
+		return "" // another host
+	}
+	s = strings.TrimSuffix(strings.TrimSuffix(s, "/"), ".git")
+
+	parts := strings.Split(s, "/")
+	if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
+		return ""
+	}
+	return parts[0] + "/" + strings.TrimSuffix(parts[1], ".git")
 }
 
 func backendAgentToLocal(a backendAgent, version string) Agent {

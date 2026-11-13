@@ -46,7 +46,12 @@ odin list
 ```
 
 ### `odin run <nom> [args...]`
-Exécute un agent installé depuis ton répertoire de travail courant. Les clés API sauvegardées sont injectées automatiquement comme variables d'environnement.
+Exécute un agent installé depuis ton répertoire de travail courant. Les clés API sauvegardées sont injectées automatiquement comme variables d'environnement, ainsi que `ODIN_AGENT_NAME` et `ODIN_AGENT_DIR`.
+
+- Tout ce qui suit le nom de l'agent (y compris les flags) est transmis tel quel à l'agent.
+- stdin/stdout/stderr sont branchés directement : les agents interactifs ou longs fonctionnent normalement.
+- Le code de sortie de l'agent est propagé (`odin run ... && ...` fonctionne).
+- Si une clé déclarée dans `requires` n'est ni dans `~/.odin/keys.json` ni dans l'environnement, le run est refusé.
 
 ```sh
 odin run commit-helper
@@ -74,10 +79,16 @@ odin install commit-helper
   → demande les clés API manquantes → stockées dans ~/.odin/keys.json
 
 odin run commit-helper
-  → lit ~/.odin/registry.json pour trouver la commande
-  → exécute depuis le cwd de l'utilisateur
+  → lit ~/.odin/registry.json pour trouver l'entrypoint
+  → résout le script de l'entrypoint en chemin absolu dans ~/.odin/agents/<nom>/
+  → exécute depuis le cwd de l'utilisateur, en streamant stdin/stdout/stderr
   → injecte les clés de ~/.odin/keys.json en variables d'env
 ```
+
+**Résolution de l'entrypoint à l'install** (`GET /api/v1/packages/{name}/{version}`) :
+1. `version.manifest_toml` s'il est fourni par le backend ;
+2. sinon `odin.toml` / `manifest.toml` du repo GitHub pointé par `version.repo_link` ;
+3. sinon l'agent est installé sans entrypoint et `odin run` explique qu'il faut un manifest.
 
 **Fichiers locaux :**
 - `~/.odin/registry.json` — agents installés
