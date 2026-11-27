@@ -34,6 +34,9 @@ type Agent struct {
 	Category  string `json:"category,omitempty"`
 	AgentType string `json:"agent_type,omitempty"`
 	Runtime   string `json:"runtime,omitempty"`
+	// Marketplace metadata, only populated by search results.
+	IsOfficialPick bool `json:"is_official_pick,omitempty" toml:"-"`
+	DownloadsCount int  `json:"downloads_count,omitempty"  toml:"-"`
 }
 
 // Registry is the local list of installed agents persisted at ~/.odin/registry.json.
@@ -137,6 +140,16 @@ func doGet(path string) ([]byte, int, error) {
 	return body, resp.StatusCode, nil
 }
 
+// apiError builds a readable error from a non-2xx registry response, falling
+// back to the HTTP status when the body is not a CLIErrorResponse.
+func apiError(body []byte, status int) error {
+	var apiErr cliErrorResponse
+	if json.Unmarshal(body, &apiErr) != nil || apiErr.Code == "" {
+		return fmt.Errorf("registry error: HTTP %d", status)
+	}
+	return fmt.Errorf("registry error (%s): %s", apiErr.Code, apiErr.Message)
+}
+
 // SearchPackages calls GET /api/v1/packages/search?q=<query> and returns matching agents.
 func SearchPackages(query string) ([]Agent, error) {
 	path := "/api/v1/packages/search"
@@ -149,9 +162,7 @@ func SearchPackages(query string) ([]Agent, error) {
 		return nil, err
 	}
 	if status != http.StatusOK {
-		var apiErr cliErrorResponse
-		json.Unmarshal(body, &apiErr)
-		return nil, fmt.Errorf("registry error (%s): %s", apiErr.Code, apiErr.Message)
+		return nil, apiError(body, status)
 	}
 
 	var resp packageSearchResponse
@@ -189,9 +200,7 @@ func FetchPackage(name, version string) (Agent, error) {
 	}
 
 	if status != http.StatusOK {
-		var apiErr cliErrorResponse
-		json.Unmarshal(body, &apiErr)
-		return Agent{}, fmt.Errorf("registry error (%s): %s", apiErr.Code, apiErr.Message)
+		return Agent{}, apiError(body, status)
 	}
 
 	var detail packageDetailResponse
@@ -267,6 +276,9 @@ func backendAgentToLocal(a backendAgent, version string) Agent {
 		Category:    a.Category,
 		AgentType:   a.AgentType,
 		Runtime:     a.Runtime,
+
+		IsOfficialPick: a.IsOfficialPick,
+		DownloadsCount: a.DownloadsCount,
 	}
 }
 

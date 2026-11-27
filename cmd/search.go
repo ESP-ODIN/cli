@@ -12,11 +12,14 @@ import (
 var searchCmd = &cobra.Command{
 	Use:   "search [mot-clé]",
 	Short: "Recherche des agents disponibles dans le registry",
-	Args:  cobra.MaximumNArgs(1),
+	Long: "Recherche des agents dans le registry ODIN par nom ou description.\n" +
+		"Sans mot-clé, liste tous les agents disponibles.",
+	Example: "  odin search\n  odin search changelog",
+	Args:    cobra.MaximumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		query := ""
 		if len(args) > 0 {
-			query = args[0]
+			query = strings.TrimSpace(args[0])
 		}
 
 		var agents []internal.Agent
@@ -50,32 +53,62 @@ var searchCmd = &cobra.Command{
 
 		if len(agents) == 0 {
 			fmt.Println(ui.StyleMuted.Render("  Aucun agent trouvé."))
+			if query != "" {
+				fmt.Println(ui.StyleMuted.Render("  Lancez : odin search  (pour tout lister)"))
+			}
 			ui.Blank()
 			return
 		}
 
+		installed := internal.LoadRegistry().Agents
+
 		for _, agent := range agents {
-			versionStr := ""
-			if agent.Version != "" {
-				versionStr = ui.StyleVersion.Render("v" + agent.Version)
-			}
-			meta := ui.StyleMuted.Render(strings.Join([]string{agent.Category, agent.Runtime}, " · "))
-			desc := ""
-			if agent.Description != "" {
-				desc = ui.StyleMuted.Render("— " + agent.Description)
-			}
-			fmt.Printf("  %s  %s  %s  %s\n",
-				ui.StyleName.Render(agent.Name),
-				versionStr,
-				meta,
-				desc,
-			)
+			printSearchResult(agent, installed)
 		}
 
-		ui.Blank()
 		fmt.Println(ui.StyleMuted.Render(fmt.Sprintf("  %d agent(s) trouvé(s)", len(agents))))
+		fmt.Println(ui.StyleMuted.Render("  Installer : odin install <nom>"))
 		ui.Blank()
 	},
+}
+
+func printSearchResult(agent internal.Agent, installed map[string]internal.Agent) {
+	line := "  " + ui.StyleName.Render(agent.Name)
+	if agent.IsOfficialPick {
+		line += "  " + ui.StyleAccent.Render("★ officiel")
+	}
+	if local, ok := installed[agent.Name]; ok {
+		tag := "installé"
+		if local.Version != "" {
+			tag += " v" + local.Version
+		}
+		line += "  " + ui.StyleSuccess.Render("✓ "+tag)
+	}
+	fmt.Println(line)
+
+	if agent.Description != "" {
+		fmt.Println("    " + ui.StyleDesc.Render(agent.Description))
+	}
+
+	meta := joinNonEmpty(" · ",
+		agent.Category,
+		agent.Runtime,
+		agent.AgentType,
+		fmt.Sprintf("%d téléchargement(s)", agent.DownloadsCount),
+	)
+	fmt.Println("    " + ui.StyleMuted.Render(meta))
+	ui.Blank()
+}
+
+// joinNonEmpty joins the non-empty parts with sep.
+func joinNonEmpty(sep string, parts ...string) string {
+	kept := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if strings.TrimSpace(p) != "" {
+			kept = append(kept, p)
+		}
+	}
+	return strings.Join(kept, sep)
 }
 
 func init() {
